@@ -7,7 +7,7 @@
     *              de 1000 pessoas, usando dados agrupados em intervalos de classe e OpenMP para paralelizar os
     *              calculos. Compara o tempo da versao sequencial com o da versao paralela.
     * Semester   : 2026/2
-    * Version    : 1.0
+    * Version    : 1.1
     *-------------------------------------------------------------------------------------------------------------------------
     *
     * COMO COMPILAR:
@@ -90,14 +90,19 @@
     }
 
     // ------------------------------------------------------------------ paralela
+    // Abaixo deste N o custo de criar/sincronizar threads supera o trabalho util,
+    // entao os laços rodam em uma unica thread (clausula if do OpenMP).
+    const long LIMIAR_PAR = 100000;
+
     Resultado calcular_par(const vector<double>& v, double h) {
         Resultado r;
         const long n = (long)v.size();
         const double* d = v.data();
+        const bool usar = n >= LIMIAR_PAR;
 
         // 1) mínimo e máximo: reduções min/max
         double mn = d[0], mx = d[0];
-    #pragma omp parallel for reduction(min : mn) reduction(max : mx)
+    #pragma omp parallel for if(usar) reduction(min : mn) reduction(max : mx)
         for (long i = 0; i < n; i++) {
             mn = min(mn, d[i]);
             mx = max(mx, d[i]);
@@ -111,12 +116,12 @@
         long* f = r.freq.data();
         const int k = r.k;
         const double li = r.li;
-    #pragma omp parallel for reduction(+ : f[:k])
+    #pragma omp parallel for if(usar) reduction(+ : f[:k])
         for (long i = 0; i < n; i++) f[(int)((d[i] - li) / h)]++;
 
         // 3) soma ponderada para a média
         double soma = 0.0;
-    #pragma omp parallel for reduction(+ : soma)
+    #pragma omp parallel for if(usar) reduction(+ : soma)
         for (int c = 0; c < k; c++) {
             double xi = li + (c + 0.5) * h;
             soma += xi * f[c];
@@ -126,7 +131,7 @@
         // 4) soma dos quadrados dos desvios para o desvio padrão
         double ss = 0.0;
         const double mu = r.media;
-    #pragma omp parallel for reduction(+ : ss)
+    #pragma omp parallel for if(usar) reduction(+ : ss)
         for (int c = 0; c < k; c++) {
             double xi = li + (c + 0.5) * h;
             ss += f[c] * (xi - mu) * (xi - mu);
@@ -150,11 +155,19 @@
         }
     }
 
+    // Executa fn() 'reps' vezes (apos 1 execucao de aquecimento) e devolve a MEDIANA
+    // dos tempos, que e mais robusta a ruido e a timers de baixa resolucao.
     template <class F>
     double medir(F fn, int reps, Resultado& out) {
-        double t0 = omp_get_wtime();
-        for (int i = 0; i < reps; i++) out = fn();
-        return (omp_get_wtime() - t0) / reps;
+        out = fn();  // aquecimento (cache, page faults, criacao do pool de threads)
+        vector<double> t(reps);
+        for (int i = 0; i < reps; i++) {
+            double t0 = omp_get_wtime();
+            out = fn();
+            t[i] = omp_get_wtime() - t0;
+        }
+        nth_element(t.begin(), t.begin() + reps / 2, t.end());
+        return t[reps / 2];
     }
 
     void mostrar(const char* nome, const char* un, const Resultado& r, double h) {
@@ -221,8 +234,8 @@
             fabs(ra.cv - sa.cv), fabs(rp.cv - sp.cv));
 
         // ----- desempenho
-        int reps = max(1L, min(2000L, 20000000L / (long)alt.size()));
-        printf("\n=== Desempenho (media de %d execucoes, estatura+peso) ===\n", reps);
+        int reps = (int)max(5L, min(2000L, 20000000L / (long)alt.size()));
+        printf("\n=== Desempenho (mediana de %d execucoes, estatura+peso) ===\n", reps);
 
         auto seq = [&] {
             Resultado x = calcular_seq(alt, HA);
@@ -234,8 +247,12 @@
         printf("Sequencial: %.6f s\n", ts);
 
         int maxt = omp_get_max_threads();
+        vector<int> lista;
+        for (int t = 1; t < maxt; t *= 2) lista.push_back(t);
+        lista.push_back(maxt);  // sempre testa o maximo disponivel
+
         printf("threads  tempo(s)    speedup  eficiencia\n");
-        for (int t = 1; t <= maxt; t *= 2) {
+        for (int t : lista) {
             omp_set_num_threads(t);
             auto par = [&] {
                 Resultado x = calcular_par(alt, HA);
@@ -244,7 +261,6 @@
             };
             double tp = medir(par, reps, tmp);
             printf("%5d    %.6f   %6.2fx   %6.1f%%\n", t, tp, ts / tp, 100.0 * ts / tp / t);
-            if (t * 2 > maxt && t != maxt) t = maxt / 2;  // garante testar maxt
         }
         return 0;
     }
