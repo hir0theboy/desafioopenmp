@@ -1,6 +1,6 @@
 # Coeficiente de Variação com OpenMP
 
-Exercício final de **Programação Paralela e Distribuída** (IESB, 2026/2).
+Exercício final de **Programação Paralela**.
 
 Programa em C++ que calcula o **coeficiente de variação (CV)** da estatura e do peso de 1000 pessoas, com os dados agrupados em **intervalos de classe** (8 cm para a estatura e 4 kg para o peso), usando **OpenMP** para paralelizar os cálculos. O programa também compara o tempo da versão sequencial com o da versão paralela.
 
